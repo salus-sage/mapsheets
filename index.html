@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html>
+
   <head>
     <meta charset="utf-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
@@ -7,10 +8,19 @@
     <meta name="description" content="">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <script src="https://api.mapbox.com/mapbox-gl-js/v1.7.0/mapbox-gl.js"></script>
+    
     <link href="https://api.mapbox.com/mapbox-gl-js/v1.7.0/mapbox-gl.css" rel="stylesheet" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/tabletop.js/1.5.1/tabletop.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/underscore.js/1.9.1/underscore-min.js"></script>
     <link rel="stylesheet" href="style.css">
-
+    
+    <script src="https://api.tiles.mapbox.com/mapbox.js/plugins/turf/v3.0.11/turf.min.js"></script>
+    <script src="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.0.9/mapbox-gl-draw.js"></script>
+    <link
+rel="stylesheet"
+href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.0.9/mapbox-gl-draw.css"
+type="text/css"
+/>
   </head>
   <style>
     body {
@@ -76,13 +86,27 @@
     .mapboxgl-popup-anchor-top>.mapboxgl-popup-tip {
       border-bottom-color: rgb(61, 59, 59);
     }
+    
+      .marker {
+      background-image: url('mapbox-icon.png');
+      background-size: cover;
+      width: 50px;
+      height: 50px;
+      border-radius: 50%;
+      cursor: pointer;
+    }
 
   </style>
 
   <body>
 
     <div id="map"></div>
+    <div class="calculation-box">
+<p>Draw a polygon using the draw tools.</p>
+<div id="calculated-area"></div>
+</div>
     <script>
+      
       var transformRequest = (url, resourceType) => {
         var isMapboxRequest =
           url.slice(8, 22) === "api.mapbox.com" ||
@@ -104,7 +128,22 @@
         transformRequest: transformRequest
       });
 
-
+      // Add zoom and rotation controls to the map.
+      map.addControl(new mapboxgl.NavigationControl());
+      
+      var draw = new MapboxDraw({
+                    displayControlsDefault: false,
+                    controls: {
+                    polygon: true,
+                    trash: true
+                    }
+                });
+      map.addControl(draw);
+ 
+      map.on('draw.create', updateArea);
+      map.on('draw.delete', updateArea);
+      map.on('draw.update', updateArea);
+ 
       map.on("load", function() {
         init();
       });
@@ -113,7 +152,7 @@
       function init() {
         Tabletop.init({
           // YOUR TURN: change 'key' value to point to your spreadsheet
-          key: 'https://docs.google.com/spreadsheets/d/1-RIXbqGz21AWaeYqxe0LOITcjQnGJyNqnh9ytfFOt9I/edit#gid=0',
+          key: '1-RIXbqGz21AWaeYqxe0LOITcjQnGJyNqnh9ytfFOt9I',
           // once Tabletop has loaded the data, it passes it to the 'callback' function, 'addPoints', defined below
           callback: addPoints,
           simpleSheet: true
@@ -123,29 +162,118 @@
 
       // create a function called addPoints that iterates through your table (row by row) to create markers and popups
       function addPoints(data) {
-        console.log(data, "test");
+       
         // iterate through your table to set the marker to lat/long values for each row
 
         data.forEach(function(row) {
-          console.log(row);
+          
           // create a variable for your popup and populate your popup with information from your table
           var popup = new mapboxgl.Popup()
-            .setHTML(`<h3>` + row.Name + `</h3>` + '<h4>' + '<b>' + 'Address: ' + '</b>' + row.Address + '</h4>' + '<h4>' + '<b>' + 'Phone: ' + '</b>' + row.Phone + '</h4>'); // use the table to populate your popup with text
+            .setHTML(`<h3>` + row.Name + `</h3>` + '<h4>' + '<b>' + 'Name: ' + '</b>' + row.Name + '</h4>' + '<h4>' + '<b>' + 'Description: ' + '</b>' + row.Description + '</h4>'); // use the table to populate your popup with text
 
-
+          var el = document.createElement('div');
+          el.className = 'marker';
           // create a variable for your markup and add it to the map 
-          var marker = new mapboxgl.Marker({
-              color: 'purple'
-            })
-            .setLngLat([row.Longitude, row.Latitude])
-            .setPopup(popup)
-            .addTo(map); // add the marker to the map
-
-
+          if(row.Color !== "yellow" && row.Linewidth === "") {
+              var marker = new mapboxgl.Marker({
+                color: row.Color
+              })
+              .setLngLat([row.Longitude, row.Latitude])
+              .setPopup(popup)
+              .addTo(map); // add the marker to the map
+              console.log(marker)
+          }
         });
+        makeLines(data);
       }
+      
+      
+      function makeLines(data) {
+        
+        var firstSplit = data.map(function(point){
+          if(point.Linestring !== ""){
+            return point.Linestring.split(" ");
+          }
+        });
+        
+        var linesData = firstSplit.map(function(pairs){
+          if(pairs){
+            return pairs.map(function(item){
+              return item.split(",");
+            })
+          }
+        });
+        
+        var linesGeoJSON = linesData.map(function(line, i){
+          if(line){
+            var jsonTemplate = {
+                              'type': 'Feature',
+                              'properties': {
+                                'color': data[i].Color,
+                                'linewidth': data[i].Linewidth
+                              },
+                              'geometry': {
+                                            'type': 'LineString'               
+                                          }
+                            };
+          
+          jsonTemplate.geometry["coordinates"] = line;
+          console.log(jsonTemplate, "jsontemplate")
+          return jsonTemplate;
+          
+          }
+          
+        });
 
+        addLineLayer(_.compact(linesGeoJSON))
+      }
+      
+      function addLineLayer(data) {
+        console.log(data, "geojson");
+        
+        map.addSource('trackroute', {
+          'type': 'geojson',
+          'data': {
+                    "type": "FeatureCollection",
+                    "features": data
+          }
+        });
+                      
+        map.addLayer({
+              'id': 'trackroute',
+              'type': 'line',
+              'source': 'trackroute',
+              'layout': {
+              'line-join': 'round',
+              'line-cap': 'round'
+              },
+              'paint': {
+              'line-color': ['get', 'color'],
+              'line-width': ['get', 'linewidth']
+              }
+          });
+        
+        
+      }
+      
+      function updateArea(e) {
+            var data = draw.getAll();
+            var answer = document.getElementById('calculated-area');
+            if (data.features.length > 0) {
+            var area = turf.area(data);
+            // restrict to area to 2 decimal points
+            var rounded_area = Math.round(area * 100) / 100;
+            answer.innerHTML =
+            '<p><strong>' +
+            rounded_area +
+            '</strong></p><p>square meters</p>';
+            } else {
+            answer.innerHTML = '';
+            if (e.type !== 'draw.delete')
+            alert('Use the draw tools to draw a polygon!');
+            }
+    }
+      
     </script>
   </body>
-
 </html>
